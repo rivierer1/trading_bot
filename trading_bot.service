@@ -1,0 +1,26 @@
+[Unit]
+Description=Riigh Trading Bot Web Application
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/riigh.com
+Environment="PATH=/var/www/riigh.com/venv/bin"
+ExecStart=/var/www/riigh.com/venv/bin/gunicorn -c gunicorn_config.py web_app:app
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=LANG=en_US.UTF-8
+Environment=LC_ALL=en_US.UTF-8
+
+# Limit resource usage
+LimitNOFILE=1024
+
+# Security
+PrivateTmp=true
+ProtectSystem=full
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">API Settings</h5>
+            </div>
+            <div class="card-body">
+                <form id="api-settings-form">
+                    <!-- ThinkOrSwim API Settings -->
+                    <div class="mb-4">
+                        <h6 class="mb-3">ThinkOrSwim API Settings</h6>
+                        <div class="mb-3">
+                            <label for="tos_api_key" class="form-label">API Key</label>
+                            <input type="password" class="form-control" id="tos_api_key" name="TOS_API_KEY" value="{{ config.get('TOS_API_KEY', '') }}" placeholder="Enter ThinkOrSwim API Key">
+                        </div>
+                        <div class="mb-3">
+                            <label for="tos_redirect_uri" class="form-label">Redirect URI</label>
+                            <input type="text" class="form-control" id="tos_redirect_uri" name="TOS_REDIRECT_URI" value="{{ config.get('TOS_REDIRECT_URI', '') }}" placeholder="Enter ThinkOrSwim Redirect URI">
+                        </div>
+                        <div class="mb-3">
+                            <label for="tos_account_id" class="form-label">Account ID</label>
+                            <input type="text" class="form-control" id="tos_account_id" name="TOS_ACCOUNT_ID" value="{{ config.get('TOS_ACCOUNT_ID', '') }}" placeholder="Enter ThinkOrSwim Account ID">
+                        </div>
+                    </div>
+
+                    <!-- Twitter API Settings -->
+                    <div class="mb-4">
+                        <h6 class="mb-3">Twitter API Settings</h6>
+                        <div class="mb-3">
+                            <label for="twitter_api_key" class="form-label">API Key</label>
+                            <input type="password" class="form-control" id="twitter_api_key" name="TWITTER_API_KEY" value="{{ config.get('TWITTER_API_KEY', '') }}" placeholder="Enter Twitter API Key">
+                        </div>
+                        <div class="mb-3">
+                            <label for="twitter_api_secret" class="form-label">API Secret</label>
+                            <input type="password" class="form-control" id="twitter_api_secret" name="TWITTER_API_SECRET" value="{{ config.get('TWITTER_API_SECRET', '') }}" placeholder="Enter Twitter API Secret">
+                        </div>
+                        <div class="mb-3">
+                            <label for="twitter_bearer_token" class="form-label">Bearer Token</label>
+                            <input type="password" class="form-control" id="twitter_bearer_token" name="TWITTER_BEARER_TOKEN" value="{{ config.get('TWITTER_BEARER_TOKEN', '') }}" placeholder="Enter Twitter Bearer Token">
+                        </div>
+                    </div>
+
+                    <!-- OpenAI API Settings -->
+                    <div class="mb-4">
+                        <h6 class="mb-3">OpenAI API Settings</h6>
+                        <div class="mb-3">
+                            <label for="openai_api_key" class="form-label">API Key</label>
+                            <input type="password" class="form-control" id="openai_api_key" name="OPENAI_API_KEY" value="{{ config.get('OPENAI_API_KEY', '') }}" placeholder="Enter OpenAI API Key">
+                        </div>
+                    </div>
+
+                    <!-- Trading Settings -->
+                    <div class="mb-4">
+                        <h6 class="mb-3">Trading Settings</h6>
+                        <div class="mb-3">
+                            <label for="max_position_size" class="form-label">Maximum Position Size ($)</label>
+                            <input type="number" class="form-control" id="max_position_size" name="MAX_POSITION_SIZE" value="{{ config.get('MAX_POSITION_SIZE', '1000') }}" placeholder="Enter Maximum Position Size">
+                        </div>
+                        <div class="mb-3">
+                            <label for="stop_loss_percentage" class="form-label">Stop Loss Percentage (%)</label>
+                            <input type="number" step="0.1" class="form-control" id="stop_loss_percentage" name="STOP_LOSS_PERCENTAGE" value="{{ config.get('STOP_LOSS_PERCENTAGE', '2') }}" placeholder="Enter Stop Loss Percentage">
+                        </div>
+                        <div class="mb-3">
+                            <label for="take_profit_percentage" class="form-label">Take Profit Percentage (%)</label>
+                            <input type="number" step="0.1" class="form-control" id="take_profit_percentage" name="TAKE_PROFIT_PERCENTAGE" value="{{ config.get('TAKE_PROFIT_PERCENTAGE', '4') }}" placeholder="Enter Take Profit Percentage">
+                        </div>
+                        <div class="mb-3">
+                            <label for="trading_symbols" class="form-label">Trading Symbols (comma-separated)</label>
+                            <input type="text" class="form-control" id="trading_symbols" name="TRADING_SYMBOLS" value="{{ config.get('TRADING_SYMBOLS', 'SPY,AAPL,MSFT') }}" placeholder="Enter Trading Symbols">
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">Save Settings</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+{% endblock %}
