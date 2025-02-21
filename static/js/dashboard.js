@@ -1,6 +1,8 @@
 document.addEventListener('DOMContentLoaded', function() {
     const socket = io();
     let priceChart = null;
+    let marketDataInterval = null;
+    const REFRESH_INTERVAL = 30000; // 30 seconds
 
     // Initialize price chart
     function initializePriceChart() {
@@ -142,6 +144,136 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // Market Data Management
+    async function updateMarketData() {
+        try {
+            // Check market status
+            const statusResponse = await fetch('/api/market/status');
+            const statusData = await statusResponse.json();
+            
+            if (!statusData.is_open) {
+                document.getElementById('market-status').innerHTML = '<span class="badge bg-danger">Market Closed</span>';
+                return;
+            }
+            
+            document.getElementById('market-status').innerHTML = '<span class="badge bg-success">Market Open</span>';
+            
+            // Get market snapshot
+            const snapshotResponse = await fetch('/api/market/snapshot?symbols=SPY,QQQ,DIA,AAPL,MSFT,GOOGL');
+            const snapshotData = await snapshotResponse.json();
+            
+            // Update market overview
+            const marketOverview = document.getElementById('market-overview');
+            marketOverview.innerHTML = '';
+            
+            for (const [symbol, data] of Object.entries(snapshotData)) {
+                const changeClass = data.change >= 0 ? 'text-success' : 'text-danger';
+                const changeArrow = data.change >= 0 ? '▲' : '▼';
+                
+                marketOverview.innerHTML += `
+                    <div class="col-md-4 mb-3">
+                        <div class="card">
+                            <div class="card-body">
+                                <h5 class="card-title">${symbol}</h5>
+                                <p class="card-text">
+                                    Price: $${data.price.toFixed(2)}<br>
+                                    Change: <span class="${changeClass}">${changeArrow} ${Math.abs(data.change).toFixed(2)}%</span><br>
+                                    Volume: ${data.volume.toLocaleString()}<br>
+                                    Time: ${new Date(data.time).toLocaleTimeString()}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Get market breadth
+            const breadthResponse = await fetch('/api/market/breadth');
+            const breadthData = await breadthResponse.json();
+            
+            // Update market breadth
+            const breadthDiv = document.getElementById('market-breadth');
+            breadthDiv.innerHTML = `
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Market Breadth</h5>
+                        <p class="card-text">
+                            Advancing: ${breadthData.advancing}<br>
+                            Declining: ${breadthData.declining}<br>
+                        </p>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <h6>Top Gainers</h6>
+                                <ul class="list-unstyled">
+                                    ${breadthData.top_gainers.map(stock => 
+                                        `<li>${stock.symbol}: +${stock.change.toFixed(2)}%</li>`
+                                    ).join('')}
+                                </ul>
+                            </div>
+                            <div class="col-md-6">
+                                <h6>Top Losers</h6>
+                                <ul class="list-unstyled">
+                                    ${breadthData.top_losers.map(stock => 
+                                        `<li>${stock.symbol}: ${stock.change.toFixed(2)}%</li>`
+                                    ).join('')}
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+        } catch (error) {
+            console.error('Error updating market data:', error);
+        }
+    }
+
+    // Start market data updates
+    function startMarketDataUpdates() {
+        updateMarketData(); // Initial update
+        marketDataInterval = setInterval(updateMarketData, REFRESH_INTERVAL);
+    }
+
+    // Stop market data updates
+    function stopMarketDataUpdates() {
+        if (marketDataInterval) {
+            clearInterval(marketDataInterval);
+            marketDataInterval = null;
+        }
+    }
+
+    // Technical Analysis
+    async function updateTechnicalData(symbol) {
+        try {
+            const [technicalResponse, vwapResponse] = await Promise.all([
+                fetch(`/api/market/technical/${symbol}`),
+                fetch(`/api/market/vwap/${symbol}`)
+            ]);
+            
+            const technicalData = await technicalResponse.json();
+            const vwapData = await vwapResponse.json();
+            
+            const technicalDiv = document.getElementById('technical-analysis');
+            technicalDiv.innerHTML = `
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Technical Analysis - ${symbol}</h5>
+                        <p class="card-text">
+                            Current Price: $${technicalData.current_price.toFixed(2)}<br>
+                            SMA (5): $${technicalData.sma_5.toFixed(2)}<br>
+                            SMA (20): $${technicalData.sma_20.toFixed(2)}<br>
+                            RSI: ${technicalData.rsi.toFixed(2)}<br>
+                            VWAP: $${vwapData.vwap.toFixed(2)}<br>
+                            Volume: ${technicalData.volume.toLocaleString()}
+                        </p>
+                    </div>
+                </div>
+            `;
+        } catch (error) {
+            console.error('Error updating technical data:', error);
+        }
+    }
+
     // Socket event handlers
     socket.on('connect', () => {
         document.getElementById('status-indicator').classList.add('active');
@@ -182,4 +314,20 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Initialize chart on load
     initializePriceChart();
+
+    // Start market data updates
+    startMarketDataUpdates();
+
+    // Add symbol search functionality
+    const symbolForm = document.getElementById('symbol-form');
+    symbolForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const symbol = document.getElementById('symbol-input').value.toUpperCase();
+        updateTechnicalData(symbol);
+    });
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', function() {
+        stopMarketDataUpdates();
+    });
 });
