@@ -12,9 +12,12 @@ logger = logging.getLogger(__name__)
 class ThinkOrSwimClient:
     def __init__(self):
         load_dotenv()
-        api_key = os.getenv('TOS_API_KEY')
-        # TD Ameritrade API key should not include @AMER.OAUTHAP as the library adds it
-        self.api_key = api_key.split('@')[0] if api_key and '@' in api_key else api_key
+        self.api_key = os.getenv('TOS_API_KEY')
+        if not self.api_key:
+            logger.error("TOS_API_KEY not found in environment variables")
+        else:
+            logger.info(f"Loaded API key: {self.api_key[:5]}...")  # Only log first 5 chars for security
+            
         self.api_secret = os.getenv('TOS_API_SECRET')
         self.redirect_uri = os.getenv('TOS_REDIRECT_URI', 'http://localhost:8080')
         self.token_path = 'token.json'
@@ -25,8 +28,8 @@ class ThinkOrSwimClient:
     def _authenticate(self):
         """Authenticate with TD Ameritrade API"""
         try:
-            if not self.api_key or not self.api_secret:
-                logger.error("TOS_API_KEY or TOS_API_SECRET not found in environment variables")
+            if not self.api_key:
+                logger.error("TOS_API_KEY not found in environment variables")
                 return
 
             if os.path.exists(self.token_path):
@@ -50,7 +53,10 @@ class ThinkOrSwimClient:
                 from selenium.webdriver.chrome.options import Options
 
                 chrome_options = Options()
-                chrome_options.add_argument("--headless")  # Run in headless mode
+                # chrome_options.add_argument("--headless")  # Run in headless mode
+                chrome_options.add_argument("--ignore-certificate-errors")  # Accept self-signed certificates
+                chrome_options.add_argument("--ignore-ssl-errors")
+                chrome_options.add_argument("--allow-insecure-localhost")
                 
                 service = Service(ChromeDriverManager().install())
                 driver = webdriver.Chrome(service=service, options=chrome_options)

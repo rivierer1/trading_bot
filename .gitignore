@@ -29,6 +29,15 @@ wheels/
 logs/
 trading_bot.log
 
+# SSL Certificates
+*.pem
+*.key
+*.crt
+
+# Tokens and credentials
+token.json
+*.env.txt
+
 # IDE specific files
 .idea/
 .vscode/
