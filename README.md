@@ -39,6 +39,20 @@ OPENAI_API_KEY=your_api_key
 python main.py
 ```
 
+## Deployment
+The project uses automated deployment via GitHub webhooks. When changes are pushed to the main branch, they are automatically deployed to the production server.
+
+### Manual Deployment
+If needed, manual deployment can be performed using:
+```bash
+./deploy.sh
+```
+
+This script will:
+1. Pull the latest changes from GitHub
+2. Install any new dependencies
+3. Restart the necessary services
+
 ## Security Notice
 - Never commit your `.env` file or expose your API keys
 - Use paper trading for testing
