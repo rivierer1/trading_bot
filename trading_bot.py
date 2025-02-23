@@ -3,26 +3,27 @@ import schedule
 from datetime import datetime, time as dt_time
 import pytz
 from config import TradingConfig, STRATEGIES
-from tos_client import ThinkOrSwimClient
-from twitter_client import TwitterClient
+from alpaca_client import AlpacaClient
 from ai_analyzer import AIAnalyzer
+from market_data_service import MarketDataService
 
 class TradingBot:
     def __init__(self, config: TradingConfig):
         self.config = config
-        self.tos = ThinkOrSwimClient()
-        self.twitter = TwitterClient()
+        self.alpaca = AlpacaClient()
+        self.market_data = MarketDataService()
         self.ai = AIAnalyzer()
         self.est_tz = pytz.timezone('US/Eastern')
         self.running = False
         self.update_handler = None
 
     def is_market_open(self):
-        now = datetime.now(self.est_tz)
-        market_start = dt_time.fromisoformat(self.config.trading_hours_start)
-        market_end = dt_time.fromisoformat(self.config.trading_hours_end)
-        current_time = now.time()
-        return market_start <= current_time <= market_end
+        try:
+            clock = self.alpaca.get_clock()
+            return clock['is_open'] if clock else False
+        except Exception as e:
+            print(f"Error checking market status: {e}")
+            return False
 
     def set_update_handler(self, handler):
         """Set the handler for UI updates"""
@@ -34,56 +35,74 @@ class TradingBot:
             self.update_handler(update_type, data)
 
     def analyze_symbol(self, symbol):
-        # Get market data
-        price_history = self.tos.get_price_history(symbol)
-        if price_history is None:
+        try:
+            # Get market data
+            snapshot = self.market_data.get_market_snapshot([symbol])
+            if not snapshot or symbol not in snapshot:
+                print(f"No market data available for {symbol}")
+                return None
+
+            # Get technical indicators
+            indicators = self.market_data.get_technical_indicators(symbol)
+            if not indicators:
+                print(f"No technical indicators available for {symbol}")
+                return None
+
+            # Get market context
+            market_context = self.ai.analyze_market_context(
+                str(snapshot[symbol]),
+                []  # No tweets needed since we're using technical analysis
+            )
+
+            # Notify UI of updates
+            self.notify_update('market_data', {
+                'symbol': symbol,
+                'snapshot': snapshot[symbol],
+                'indicators': indicators
+            })
+
+            return {
+                'symbol': symbol,
+                'snapshot': snapshot[symbol],
+                'indicators': indicators,
+                'market_context': market_context
+            }
+        except Exception as e:
+            print(f"Error analyzing symbol {symbol}: {e}")
             return None
-
-        # Get relevant tweets
-        tweets = self.twitter.get_tweets(
-            [symbol] + self.config.twitter_keywords,
-            hours_lookback=STRATEGIES['sentiment']['lookback_period']
-        )
-
-        # Analyze sentiment
-        tweet_texts = [tweet['text'] for tweet in tweets]
-        sentiment_score = self.ai.analyze_sentiment(tweet_texts)
-
-        # Get market context
-        market_context = self.ai.analyze_market_context(
-            price_history.tail().to_string(),
-            tweet_texts
-        )
-
-        # Notify UI of updates
-        self.notify_update('sentiment', {
-            'score': sentiment_score,
-            'tweets': tweets
-        })
-
-        return {
-            'symbol': symbol,
-            'price_data': price_history,
-            'sentiment_score': sentiment_score,
-            'market_context': market_context
-        }
 
     def execute_trade(self, symbol, action, quantity):
         try:
-            response = self.tos.place_order(symbol, quantity, instruction=action)
+            # Convert action to Alpaca's side format
+            side = 'buy' if action.upper() == 'BUY' else 'sell'
             
-            # Notify UI of the trade
-            trade_data = {
-                'symbol': symbol,
-                'action': action,
-                'quantity': quantity,
-                'price': float(self.tos.get_quote(symbol)[symbol]['lastPrice']),
-                'time': datetime.now().isoformat()
-            }
-            self.notify_update('trades', [trade_data])
+            # Place the order
+            order = self.alpaca.submit_order(
+                symbol=symbol,
+                qty=quantity,
+                side=side,
+                type='market',
+                time_in_force='day'
+            )
             
-            print(f"Trade executed: {action} {quantity} shares of {symbol}")
-            return response
+            if order:
+                # Get the current quote
+                snapshot = self.market_data.get_market_snapshot([symbol])
+                price = snapshot[symbol]['price'] if snapshot and symbol in snapshot else None
+                
+                # Notify UI of the trade
+                trade_data = {
+                    'symbol': symbol,
+                    'action': action,
+                    'quantity': quantity,
+                    'price': price,
+                    'time': datetime.now().isoformat(),
+                    'order_id': order.get('id')
+                }
+                self.notify_update('trades', [trade_data])
+                
+                print(f"Trade executed: {action} {quantity} shares of {symbol}")
+                return order
         except Exception as e:
             print(f"Error executing trade: {e}")
             return None
@@ -103,28 +122,44 @@ class TradingBot:
                 time.sleep(60)
                 continue
 
-            for symbol in self.config.symbols:
-                if not self.running:
-                    break
-                    
-                analysis = self.analyze_symbol(symbol)
-                if analysis is None:
-                    continue
+            try:
+                for symbol in self.config.symbols:
+                    if not self.running:
+                        break
+                        
+                    analysis = self.analyze_symbol(symbol)
+                    if analysis is None:
+                        continue
 
-                # Get current positions
-                positions = self.tos.get_account_positions()
-                self.notify_update('positions', positions)
+                    # Get current positions
+                    positions = self.alpaca.get_positions()
+                    self.notify_update('positions', positions)
 
-                # Get current price and notify UI
-                current_price = float(self.tos.get_quote(symbol)[symbol]['lastPrice'])
-                self.notify_update('price', {'symbol': symbol, 'price': current_price})
+                    # Get current price
+                    snapshot = self.market_data.get_market_snapshot([symbol])
+                    if snapshot and symbol in snapshot:
+                        current_price = snapshot[symbol]['price']
+                        self.notify_update('price', {'symbol': symbol, 'price': current_price})
 
-                # Trading decision based on sentiment and technical analysis
-                if analysis['sentiment_score'] > self.config.sentiment_threshold:
-                    quantity = int(self.config.max_position_size / current_price)
-                    self.execute_trade(symbol, 'BUY', quantity)
-                elif analysis['sentiment_score'] < -self.config.sentiment_threshold:
-                    quantity = int(self.config.max_position_size / current_price)
-                    self.execute_trade(symbol, 'SELL', quantity)
+                        # Trading decision based on technical analysis
+                        indicators = analysis['indicators']
+                        if indicators:
+                            # Example strategy using RSI
+                            rsi = indicators.get('RSI', 50)  # Default to neutral if not available
+                            
+                            if rsi < 30:  # Oversold
+                                quantity = int(self.config.max_position_size / current_price)
+                                self.execute_trade(symbol, 'BUY', quantity)
+                            elif rsi > 70:  # Overbought
+                                quantity = int(self.config.max_position_size / current_price)
+                                self.execute_trade(symbol, 'SELL', quantity)
+
+                # Update portfolio
+                portfolio = self.alpaca.get_portfolio_summary()
+                if portfolio:
+                    self.notify_update('portfolio', portfolio)
+
+            except Exception as e:
+                print(f"Error in trading loop: {e}")
 
             time.sleep(5)  # Wait 5 seconds before next iteration

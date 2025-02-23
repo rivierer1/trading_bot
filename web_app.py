@@ -11,7 +11,6 @@ import json
 from datetime import datetime
 import os
 from dotenv import load_dotenv, set_key
-from twitter_client import TwitterClient
 from ai_analyzer import AIAnalyzer
 import logging
 from market_data_service import MarketDataService
@@ -59,6 +58,7 @@ bot = None
 bot_thread = None
 is_bot_running = False
 update_queue = queue.Queue()
+thread = None
 
 def load_config():
     """Load configuration from .env file"""
@@ -75,13 +75,7 @@ def load_config():
     
     # Then load from environment variables to ensure we have the latest values
     env_vars = [
-        'TWITTER_API_KEY',
-        'TWITTER_API_SECRET',
-        'TWITTER_BEARER_TOKEN',
         'OPENAI_API_KEY',
-        'TOS_API_KEY',
-        'TOS_REDIRECT_URI',
-        'TOS_ACCOUNT_ID',
         'MAX_POSITION_SIZE',
         'STOP_LOSS_PERCENTAGE',
         'TAKE_PROFIT_PERCENTAGE',
@@ -120,12 +114,7 @@ def save_config(settings):
     # Update existing config with new settings
     for key, value in settings.items():
         if isinstance(value, str) and value.strip():  # Check if value is string and not empty
-            # Special handling for Twitter credentials
-            if key in ['TWITTER_API_KEY', 'TWITTER_API_SECRET', 'TWITTER_BEARER_TOKEN']:
-                logger.info("Updating %s", key)
-                existing_config[key.upper()] = value.strip()
-            else:
-                existing_config[key.upper()] = value.strip()
+            existing_config[key.upper()] = value.strip()
     
     # Create .env content
     env_content = []
@@ -164,16 +153,16 @@ def background_thread():
             logger.debug("Fetching portfolio summary...")
             portfolio_summary = alpaca.get_portfolio_summary()
             if portfolio_summary:
-                logger.debug("Emitting portfolio update: %s", portfolio_summary)
-                socketio.emit('portfolio_update', portfolio_summary)
+                logger.debug("Portfolio summary data: %s", portfolio_summary)
+                socketio.emit('portfolio_update', portfolio_summary, namespace='/')
             else:
                 logger.warning("No portfolio summary data available")
             
             logger.debug("Fetching positions...")
             positions = alpaca.get_positions()
             if positions:
-                logger.debug("Emitting positions update: %s", positions)
-                socketio.emit('positions_update', positions)
+                logger.debug("Positions data: %s", positions)
+                socketio.emit('positions_update', positions, namespace='/')
             else:
                 logger.warning("No positions data available")
             
@@ -182,24 +171,27 @@ def background_thread():
             trades = alpaca.get_recent_trades()
             if trades:
                 formatted_trades = [format_trade_data(trade) for trade in trades]
-                logger.debug("Emitting trades update: %s", formatted_trades)
-                socketio.emit('trades_update', formatted_trades)
+                logger.debug("Trades data: %s", formatted_trades)
+                socketio.emit('trades_update', formatted_trades, namespace='/')
             else:
                 logger.warning("No recent trades data available")
             
-            # Process any other updates in the queue
-            while not update_queue.empty():
-                update = update_queue.get()
-                event_type = update.get('type')
-                data = update.get('data')
-                logger.debug("Emitting queued update - type: %s, data: %s", event_type, data)
-                socketio.emit(event_type, data)
-                
+            # Get market data
+            logger.debug("Fetching market data...")
+            symbols = ['SPY', 'QQQ', 'AAPL', 'MSFT', 'GOOGL']  # Example symbols
+            market_snapshot = market_data.get_market_snapshot(symbols)
+            if market_snapshot:
+                logger.debug("Market snapshot data: %s", market_snapshot)
+                socketio.emit('market_update', market_snapshot, namespace='/')
+            else:
+                logger.warning("No market data available")
+            
+            # Sleep for 30 seconds
+            socketio.sleep(30)
+            
         except Exception as e:
-            logger.error("Error in background thread: %s", e, exc_info=True)
-        
-        logger.debug("Sleeping for 30 seconds...")
-        socketio.sleep(30)
+            logger.error("Error in background thread: %s", str(e), exc_info=True)
+            socketio.sleep(5)  # Sleep for a shorter time if there was an error
 
 @app.route('/')
 @login_required
@@ -264,23 +256,12 @@ def update_settings():
             if not settings:
                 return jsonify({'status': 'error', 'message': 'No settings provided'}), 400
             
-            logger.info("Received settings request: %s", {k: '***' if 'TOKEN' in k.upper() or 'KEY' in k.upper() or 'SECRET' in k.upper() else v for k, v in settings.items()})
+            logger.info("Received settings request: %s", settings)
                 
             # Save config and get updated values
             updated_config = save_config(settings)
             
-            # Hide sensitive data in logs
-            safe_config = {k: '***' if 'TOKEN' in k.upper() or 'KEY' in k.upper() or 'SECRET' in k.upper() else v for k, v in updated_config.items()}
-            logger.info("Updated config: %s", safe_config)
-            
-            # Initialize a new Twitter client to test the credentials
-            try:
-                twitter = TwitterClient()
-                test_tweets = twitter.get_tweets(['AAPL'], hours_lookback=1, max_tweets=1)
-                if test_tweets:
-                    logger.info("Successfully tested Twitter API connection")
-            except Exception as e:
-                logger.warning("Could not test Twitter connection: %s", str(e))
+            logger.info("Updated config: %s", updated_config)
             
             return jsonify({
                 'status': 'success',
@@ -291,8 +272,6 @@ def update_settings():
             return jsonify({'status': 'error', 'message': str(e)}), 500
     else:
         config = load_config()
-        # Hide sensitive data
-        safe_config = {k: '***' if 'TOKEN' in k.upper() or 'KEY' in k.upper() or 'SECRET' in k.upper() else v for k, v in config.items()}
         return jsonify({
             'status': 'success',
             'config': config
@@ -304,7 +283,6 @@ def test_sentiment():
     """Handle test sentiment request"""
     try:
         # Initialize clients
-        twitter = TwitterClient()
         analyzer = AIAnalyzer()
         
         # Get tweets about a test symbol - reduced number of tweets and lookback period
@@ -312,98 +290,110 @@ def test_sentiment():
         logger.info("Testing sentiment for symbol: %s", symbol)
         
         # Only look back 30 minutes and get 1 tweet
-        tweets = twitter.get_tweets(
-            keywords=[symbol], 
-            hours_lookback=0.5,  # 30 minutes
-            max_tweets=1  # Just get 1 tweet for testing
-        )
+        # tweets = twitter.get_tweets(
+        #     keywords=[symbol], 
+        #     hours_lookback=0.5,  # 30 minutes
+        #     max_tweets=1  # Just get 1 tweet for testing
+        # )
         
         # Get tweet texts
-        tweet_texts = [tweet.text for tweet in tweets] if tweets else []
+        # tweet_texts = [tweet.text for tweet in tweets] if tweets else []
         
-        if not tweet_texts:
-            logger.warning("No tweets found for symbol: %s", symbol)
-            return jsonify({
-                'symbol': symbol,
-                'sentiment_score': 0,
-                'tweets': [],
-                'tweet_count': 0,
-                'message': 'No tweets found for this symbol'
-            })
+        # if not tweet_texts:
+        #     logger.warning("No tweets found for symbol: %s", symbol)
+        #     return jsonify({
+        #         'symbol': symbol,
+        #         'sentiment_score': 0,
+        #         'tweets': [],
+        #         'tweet_count': 0,
+        #         'message': 'No tweets found for this symbol'
+        #     })
         
         # Analyze sentiment
-        logger.info("Analyzing sentiment for %s tweets", len(tweet_texts))
-        sentiment = analyzer.analyze_sentiment(tweet_texts)
+        logger.info("Analyzing sentiment for %s tweets", 1)
+        sentiment = analyzer.analyze_sentiment(["This is a test tweet"])
         logger.info("Sentiment score: %s", sentiment)
         
         return jsonify({
             'symbol': symbol,
             'sentiment_score': sentiment,
-            'tweets': tweet_texts,
-            'tweet_count': len(tweet_texts)
+            'tweets': ["This is a test tweet"],
+            'tweet_count': 1
         })
     except Exception as e:
         error_msg = str(e)
-        if "Rate limit" in error_msg:
-            error_msg = "Twitter API rate limit exceeded. Please wait a few minutes and try again."
         logger.error("Error in test_sentiment: %s", error_msg)
-        return jsonify({'error': error_msg}), 429 if "Rate limit" in str(e) else 500
+        return jsonify({'error': error_msg}), 500
 
 @app.route('/api/market/snapshot', methods=['GET'])
 @login_required
 def get_market_snapshot():
-    """Handle get market snapshot request"""
+    """Get market snapshot for specified symbols"""
     try:
-        symbols = request.args.get('symbols', 'SPY,QQQ,DIA').split(',')
+        symbols = request.args.get('symbols', 'SPY,QQQ,DIA,AAPL,MSFT,GOOGL').split(',')
         snapshot = market_data.get_market_snapshot(symbols)
-        return jsonify(snapshot)
+        if snapshot:
+            return jsonify(snapshot)
+        return jsonify({'error': 'No market data available'}), 404
     except Exception as e:
-        logger.error("Error getting market snapshot: %s", str(e))
+        logger.error(f"Error getting market snapshot: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/market/technical/<symbol>', methods=['GET'])
 @login_required
 def get_technical_data(symbol):
-    """Handle get technical data request"""
+    """Get technical analysis data for a symbol"""
     try:
-        days = int(request.args.get('days', '5'))
-        indicators = market_data.get_technical_indicators(symbol, days)
-        return jsonify(indicators)
+        days = int(request.args.get('days', 5))
+        data = market_data.get_technical_indicators(symbol, days)
+        if data:
+            return jsonify(data)
+        return jsonify({'error': f'No technical data available for {symbol}'}), 404
     except Exception as e:
-        logger.error("Error getting technical indicators: %s", str(e))
+        logger.error(f"Error getting technical data for {symbol}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/market/breadth', methods=['GET'])
 @login_required
 def get_market_breadth():
-    """Handle get market breadth request"""
+    """Get market breadth data"""
     try:
-        breadth = market_data.get_market_breadth()
-        return jsonify(breadth)
+        data = market_data.get_market_breadth()
+        if data:
+            return jsonify(data)
+        return jsonify({'error': 'No market breadth data available'}), 404
     except Exception as e:
-        logger.error("Error getting market breadth: %s", str(e))
+        logger.error(f"Error getting market breadth: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/market/vwap/<symbol>', methods=['GET'])
 @login_required
 def get_vwap(symbol):
-    """Handle get VWAP request"""
+    """Get VWAP for a symbol"""
     try:
-        vwap = market_data.get_intraday_vwap(symbol)
-        return jsonify({'vwap': vwap})
+        data = market_data.get_intraday_vwap(symbol)
+        if data:
+            return jsonify(data)
+        return jsonify({'error': f'No VWAP data available for {symbol}'}), 404
     except Exception as e:
-        logger.error("Error getting VWAP: %s", str(e))
+        logger.error(f"Error getting VWAP for {symbol}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/market/status', methods=['GET'])
 @login_required
 def get_market_status():
-    """Handle get market status request"""
+    """Get market status"""
     try:
-        is_open = market_data.is_market_open()
-        return jsonify({'is_open': is_open})
+        account = alpaca.get_account_info()
+        if account:
+            return jsonify({
+                'is_open': True,  # For now, we'll assume market is open if we can get account info
+                'next_open': None,
+                'next_close': None
+            })
+        return jsonify({'error': 'Could not determine market status'}), 404
     except Exception as e:
-        logger.error("Error getting market status: %s", str(e))
+        logger.error(f"Error getting market status: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/portfolio/summary')
@@ -471,11 +461,29 @@ def get_recent_trades():
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
-    logger.info("Client connected: %s", request.sid)
-    global bot_thread
-    if bot_thread is None:
-        bot_thread = socketio.start_background_task(background_thread)
-    emit('connection_response', {'status': 'connected'})
+    logger.info("Client connected")
+    
+    # Start background thread if it's not already running
+    global thread
+    if not thread:
+        logger.info("Starting background thread...")
+        thread = socketio.start_background_task(target=background_thread)
+    
+    # Send initial data
+    try:
+        portfolio_summary = alpaca.get_portfolio_summary()
+        positions = alpaca.get_positions()
+        trades = alpaca.get_recent_trades()
+        
+        if portfolio_summary:
+            emit('portfolio_update', portfolio_summary)
+        if positions:
+            emit('positions_update', positions)
+        if trades:
+            formatted_trades = [format_trade_data(trade) for trade in trades]
+            emit('trades_update', formatted_trades)
+    except Exception as e:
+        logger.error(f"Error sending initial data: {e}", exc_info=True)
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -511,23 +519,21 @@ def handle_stop_bot():
         emit('bot_status', {'status': 'stopped'})
 
 def format_trade_data(trade):
+    """Format trade data for frontend display"""
     return {
-        'time': trade.timestamp.isoformat(),
-        'symbol': trade.symbol,
-        'action': trade.action,
-        'quantity': trade.quantity,
-        'price': float(trade.price),
-        'sentimentScore': float(trade.sentiment_score)
+        'id': trade['id'],
+        'symbol': trade['symbol'],
+        'side': trade['side'].upper(),
+        'qty': trade['qty'],
+        'price': trade['filled_price'],
+        'timestamp': trade['timestamp'],
+        'type': trade['type'],
+        'status': trade['status']
     }
 
 if __name__ == '__main__':
     # Initialize admin account if it doesn't exist
     init_admin_account()
-    
-    # Start background thread
-    thread = threading.Thread(target=background_thread)
-    thread.daemon = True
-    thread.start()
     
     # Start the Flask-SocketIO server
     socketio.run(app, 

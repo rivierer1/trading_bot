@@ -1,14 +1,13 @@
-import logging
 import os
 from dotenv import load_dotenv
-from alpaca_client import AlpacaClient
-from twitter_client import TwitterClient
+import alpaca_trade_api as tradeapi
+import logging
 
-# Configure logging
+# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def check_environment_variables():
+def check_env_vars():
     """Check if all required environment variables are set"""
     required_vars = [
         'ALPACA_API_KEY',
@@ -17,63 +16,70 @@ def check_environment_variables():
     ]
     
     missing_vars = [var for var in required_vars if not os.getenv(var)]
-    
     if missing_vars:
         logger.error(f"Missing environment variables: {', '.join(missing_vars)}")
         logger.error("Please set these variables in your .env file")
         return False
     return True
 
+def test_alpaca_connection():
+    """Test connection to Alpaca API and verify data access"""
+    try:
+        # Load environment variables
+        load_dotenv()
+        
+        # Get API credentials
+        api_key = os.getenv('ALPACA_API_KEY')
+        api_secret = os.getenv('ALPACA_API_SECRET')
+        base_url = 'https://paper-api.alpaca.markets' if os.getenv('ALPACA_PAPER_TRADING', 'True').lower() == 'true' else 'https://api.alpaca.markets'
+        
+        logger.info("Testing Alpaca API connection...")
+        logger.info(f"Using base URL: {base_url}")
+        
+        # Initialize Alpaca API
+        api = tradeapi.REST(api_key, api_secret, base_url, api_version='v2')
+        
+        # Test account information
+        account = api.get_account()
+        logger.info("Account Information:")
+        logger.info(f"Account ID: {account.id}")
+        logger.info(f"Account Status: {account.status}")
+        logger.info(f"Portfolio Value: ${account.portfolio_value}")
+        logger.info(f"Cash: ${account.cash}")
+        logger.info(f"Buying Power: ${account.buying_power}")
+        
+        # Test positions
+        positions = api.list_positions()
+        logger.info("\nCurrent Positions:")
+        for position in positions:
+            logger.info(f"{position.symbol}: {position.qty} shares @ ${position.avg_entry_price}")
+        
+        # Test recent trades
+        trades = api.get_trades('AAPL', '2024-02-23', '2024-02-23', limit=5)
+        logger.info("\nRecent AAPL Trades (Sample):")
+        for trade in trades:
+            logger.info(f"Time: {trade.t}, Price: ${trade.p}, Size: {trade.s}")
+        
+        return True, "Alpaca connection test successful"
+        
+    except Exception as e:
+        logger.error(f"Error testing Alpaca connection: {str(e)}")
+        return False, str(e)
+
 def main():
     """Test connections to all APIs"""
     load_dotenv()
     
-    if not check_environment_variables():
+    if not check_env_vars():
         return
     
     # Test Alpaca connection
     logger.info("\n=== Testing Alpaca API Connection ===")
-    try:
-        alpaca = AlpacaClient()
-        if alpaca.test_connection():
-            logger.info("✓ Alpaca API connection successful")
-            
-            # Get some test data
-            positions = alpaca.get_positions()
-            logger.info(f"\nCurrent positions ({len(positions)}):")
-            for pos in positions:
-                pl_pct = pos['unrealized_plpc'] * 100
-                logger.info(f"{pos['symbol']}: {pos['qty']} shares @ ${pos['avg_entry_price']:.2f} "
-                          f"(Current: ${pos['current_price']:.2f}, P/L: {pl_pct:+.2f}%)")
-            
-            # Print detailed portfolio analysis
-            alpaca.print_portfolio_summary()
-            
-            # Generate portfolio visualizations
-            logger.info("\nGenerating portfolio visualizations...")
-            viz_dir = os.path.join(os.getcwd(), 'portfolio_analysis')
-            alpaca.create_portfolio_visualizations(viz_dir)
-            
-            # Get AAPL historical data (commented out for now as it needs fixing)
-            # aapl_data = alpaca.get_historical_data('AAPL', limit=5)
-            # if aapl_data is not None:
-            #     logger.info("\nLatest AAPL data:")
-            #     logger.info(aapl_data.tail(1))
-        else:
-            logger.error("✗ Failed to connect to Alpaca API")
-    except Exception as e:
-        logger.error(f"✗ Error testing Alpaca connection: {e}")
-    
-    # Test Twitter connection
-    logger.info("\n=== Testing Twitter API Connection ===")
-    try:
-        twitter = TwitterClient()
-        if twitter.test_connection():
-            logger.info("✓ Twitter API connection successful")
-        else:
-            logger.error("✗ Failed to connect to Twitter API")
-    except Exception as e:
-        logger.error(f"✗ Error testing Twitter connection: {e}")
+    success, message = test_alpaca_connection()
+    if success:
+        logger.info("✓ Alpaca API connection successful")
+    else:
+        logger.error(f"✗ {message}")
 
 if __name__ == "__main__":
     main()

@@ -63,25 +63,33 @@ class AlpacaClient:
 
     def get_positions(self):
         """Get current positions"""
-        logger.debug("Fetching positions...")
         try:
+            logger.debug("Fetching positions...")
             positions = self.trading_client.get_all_positions()
-            logger.debug(f"Retrieved {len(positions)} positions")
             
-            formatted_positions = [{
-                'symbol': pos.symbol,
-                'qty': float(pos.qty),
-                'avg_entry_price': float(pos.avg_entry_price),
-                'current_price': float(pos.current_price),
-                'market_value': float(pos.market_value),
-                'unrealized_pl': float(pos.unrealized_pl),
-                'unrealized_plpc': float(pos.unrealized_plpc)
-            } for pos in positions]
+            if not positions:
+                logger.warning("No positions found")
+                return []
+            
+            # Format positions data
+            formatted_positions = []
+            for position in positions:
+                formatted_position = {
+                    'symbol': position.symbol,
+                    'qty': float(position.qty),
+                    'avg_entry_price': float(position.avg_entry_price),
+                    'current_price': float(position.current_price),
+                    'market_value': float(position.market_value),
+                    'unrealized_pl': float(position.unrealized_pl),
+                    'unrealized_plpc': float(position.unrealized_plpc)
+                }
+                formatted_positions.append(formatted_position)
             
             logger.info(f"Positions formatted: {formatted_positions}")
             return formatted_positions
+            
         except Exception as e:
-            logger.error(f"Error getting positions: {e}", exc_info=True)
+            logger.error(f"Error getting positions: {e}")
             return []
 
     def get_historical_data(self, symbol, timeframe=TimeFrame.Day, limit=100):
