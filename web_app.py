@@ -4,6 +4,7 @@ from flask_login import LoginManager, login_user, logout_user, login_required, c
 from trading_bot import TradingBot
 from config import TradingConfig
 from auth import User, init_admin_account
+from alpaca_client import AlpacaClient
 import threading
 import queue
 import json
@@ -15,9 +16,24 @@ from ai_analyzer import AIAnalyzer
 import logging
 from market_data_service import MarketDataService
 
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'your-secret-key')  # Change this in production
-socketio = SocketIO(app)
+app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'your-secret-key')
+
+# Configure Socket.IO with async mode and logging
+socketio = SocketIO(
+    app, 
+    async_mode='threading',
+    cors_allowed_origins="*",
+    logger=True,
+    engineio_logger=True
+)
 
 # Initialize Flask-Login
 login_manager = LoginManager()
@@ -29,7 +45,14 @@ def load_user(username):
     return User.get(username)
 
 # Initialize services
-market_data = MarketDataService()
+try:
+    logger.info("Initializing services...")
+    market_data = MarketDataService()
+    alpaca = AlpacaClient()
+    logger.info("Services initialized successfully")
+except Exception as e:
+    logger.error(f"Error initializing services: {e}")
+    raise
 
 # Global variables
 bot = None
@@ -74,7 +97,7 @@ def load_config():
 
 def save_config(settings):
     """Save configuration to .env file"""
-    print("Received settings:", settings)  # Debug log
+    logger.info("Received settings request: %s", settings)
     
     env_file = '.env'
     
@@ -86,7 +109,7 @@ def save_config(settings):
                 if '=' in line:
                     key, value = line.strip().split('=', 1)
                     existing_config[key] = value
-    print("Existing config:", existing_config)  # Debug log
+    logger.info("Existing config: %s", existing_config)
     
     # Ensure we have the admin credentials
     admin_config = {
@@ -99,7 +122,7 @@ def save_config(settings):
         if isinstance(value, str) and value.strip():  # Check if value is string and not empty
             # Special handling for Twitter credentials
             if key in ['TWITTER_API_KEY', 'TWITTER_API_SECRET', 'TWITTER_BEARER_TOKEN']:
-                print(f"Updating {key}")  # Debug log
+                logger.info("Updating %s", key)
                 existing_config[key.upper()] = value.strip()
             else:
                 existing_config[key.upper()] = value.strip()
@@ -117,7 +140,7 @@ def save_config(settings):
         if key not in ['ADMIN_USERNAME', 'ADMIN_PASSWORD_HASH']:
             env_content.append(f"{key}={value}")
     
-    print("Writing config:", env_content)  # Debug log
+    logger.info("Writing config: %s", env_content)
     
     # Write all content to .env file
     with open(env_file, 'w') as f:
@@ -131,37 +154,85 @@ def save_config(settings):
 
 def background_thread():
     """Background thread for sending updates to clients"""
+    logger.info("Starting background thread for updates...")
+    thread_id = threading.get_ident()
+    logger.debug("Background thread ID: %s", thread_id)
+    
     while True:
-        if not update_queue.empty():
-            update = update_queue.get()
-            event_type = update.get('type')
-            data = update.get('data')
-            socketio.emit(event_type, data)
-        socketio.sleep(0.1)
+        try:
+            # Update portfolio data every 30 seconds
+            logger.debug("Fetching portfolio summary...")
+            portfolio_summary = alpaca.get_portfolio_summary()
+            if portfolio_summary:
+                logger.debug("Emitting portfolio update: %s", portfolio_summary)
+                socketio.emit('portfolio_update', portfolio_summary)
+            else:
+                logger.warning("No portfolio summary data available")
+            
+            logger.debug("Fetching positions...")
+            positions = alpaca.get_positions()
+            if positions:
+                logger.debug("Emitting positions update: %s", positions)
+                socketio.emit('positions_update', positions)
+            else:
+                logger.warning("No positions data available")
+            
+            # Get recent trades
+            logger.debug("Fetching recent trades...")
+            trades = alpaca.get_recent_trades()
+            if trades:
+                formatted_trades = [format_trade_data(trade) for trade in trades]
+                logger.debug("Emitting trades update: %s", formatted_trades)
+                socketio.emit('trades_update', formatted_trades)
+            else:
+                logger.warning("No recent trades data available")
+            
+            # Process any other updates in the queue
+            while not update_queue.empty():
+                update = update_queue.get()
+                event_type = update.get('type')
+                data = update.get('data')
+                logger.debug("Emitting queued update - type: %s, data: %s", event_type, data)
+                socketio.emit(event_type, data)
+                
+        except Exception as e:
+            logger.error("Error in background thread: %s", e, exc_info=True)
+        
+        logger.debug("Sleeping for 30 seconds...")
+        socketio.sleep(30)
 
 @app.route('/')
 @login_required
 def dashboard():
+    """Render dashboard page"""
+    logger.debug("Rendering dashboard page")
     return render_template('dashboard.html')
 
 @app.route('/trades')
 @login_required
 def trades():
+    """Render trades page"""
+    logger.debug("Rendering trades page")
     return render_template('trades.html')
 
 @app.route('/settings')
 @login_required
 def settings():
+    """Render settings page"""
+    logger.debug("Rendering settings page")
     config = load_config()
     return render_template('settings.html', config=config)
 
 @app.route('/test_sentiment')
 @login_required
 def test_sentiment_page():
+    """Render test sentiment page"""
+    logger.debug("Rendering test sentiment page")
     return render_template('test_sentiment.html')
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    """Handle login request"""
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
@@ -173,47 +244,50 @@ def login():
             return redirect(url_for('dashboard'))
         
         flash('Invalid username or password')
+    logger.debug("Rendering login page")
     return render_template('login.html')
 
 @app.route('/logout')
 @login_required
 def logout():
+    """Handle logout request"""
     logout_user()
     return redirect(url_for('login'))
 
 @app.route('/api/settings', methods=['POST', 'GET'])
 @login_required
 def update_settings():
+    """Handle update settings request"""
     if request.method == 'POST':
         try:
             settings = request.json
             if not settings:
                 return jsonify({'status': 'error', 'message': 'No settings provided'}), 400
             
-            print("Received settings request:", {k: '***' if 'TOKEN' in k.upper() or 'KEY' in k.upper() or 'SECRET' in k.upper() else v for k, v in settings.items()})  # Debug log but hide sensitive data
+            logger.info("Received settings request: %s", {k: '***' if 'TOKEN' in k.upper() or 'KEY' in k.upper() or 'SECRET' in k.upper() else v for k, v in settings.items()})
                 
             # Save config and get updated values
             updated_config = save_config(settings)
             
             # Hide sensitive data in logs
             safe_config = {k: '***' if 'TOKEN' in k.upper() or 'KEY' in k.upper() or 'SECRET' in k.upper() else v for k, v in updated_config.items()}
-            print("Updated config:", safe_config)  # Debug log
+            logger.info("Updated config: %s", safe_config)
             
             # Initialize a new Twitter client to test the credentials
             try:
                 twitter = TwitterClient()
                 test_tweets = twitter.get_tweets(['AAPL'], hours_lookback=1, max_tweets=1)
                 if test_tweets:
-                    print("Successfully tested Twitter API connection")
+                    logger.info("Successfully tested Twitter API connection")
             except Exception as e:
-                print(f"Warning: Could not test Twitter connection: {str(e)}")
+                logger.warning("Could not test Twitter connection: %s", str(e))
             
             return jsonify({
                 'status': 'success',
                 'config': updated_config
             })
         except Exception as e:
-            print(f"Error in update_settings: {str(e)}")
+            logger.error("Error in update_settings: %s", str(e))
             return jsonify({'status': 'error', 'message': str(e)}), 500
     else:
         config = load_config()
@@ -227,6 +301,7 @@ def update_settings():
 @app.route('/api/test_sentiment', methods=['GET'])
 @login_required
 def test_sentiment():
+    """Handle test sentiment request"""
     try:
         # Initialize clients
         twitter = TwitterClient()
@@ -234,7 +309,7 @@ def test_sentiment():
         
         # Get tweets about a test symbol - reduced number of tweets and lookback period
         symbol = request.args.get('symbol', 'AAPL')  # Default to AAPL if no symbol provided
-        logging.info(f"Testing sentiment for symbol: {symbol}")
+        logger.info("Testing sentiment for symbol: %s", symbol)
         
         # Only look back 30 minutes and get 1 tweet
         tweets = twitter.get_tweets(
@@ -247,7 +322,7 @@ def test_sentiment():
         tweet_texts = [tweet.text for tweet in tweets] if tweets else []
         
         if not tweet_texts:
-            logging.warning(f"No tweets found for symbol: {symbol}")
+            logger.warning("No tweets found for symbol: %s", symbol)
             return jsonify({
                 'symbol': symbol,
                 'sentiment_score': 0,
@@ -257,9 +332,9 @@ def test_sentiment():
             })
         
         # Analyze sentiment
-        logging.info(f"Analyzing sentiment for {len(tweet_texts)} tweets")
+        logger.info("Analyzing sentiment for %s tweets", len(tweet_texts))
         sentiment = analyzer.analyze_sentiment(tweet_texts)
-        logging.info(f"Sentiment score: {sentiment}")
+        logger.info("Sentiment score: %s", sentiment)
         
         return jsonify({
             'symbol': symbol,
@@ -271,69 +346,145 @@ def test_sentiment():
         error_msg = str(e)
         if "Rate limit" in error_msg:
             error_msg = "Twitter API rate limit exceeded. Please wait a few minutes and try again."
-        logging.error(f"Error in test_sentiment: {error_msg}")
+        logger.error("Error in test_sentiment: %s", error_msg)
         return jsonify({'error': error_msg}), 429 if "Rate limit" in str(e) else 500
 
 @app.route('/api/market/snapshot', methods=['GET'])
 @login_required
 def get_market_snapshot():
+    """Handle get market snapshot request"""
     try:
         symbols = request.args.get('symbols', 'SPY,QQQ,DIA').split(',')
         snapshot = market_data.get_market_snapshot(symbols)
         return jsonify(snapshot)
     except Exception as e:
-        logging.error(f"Error getting market snapshot: {str(e)}")
+        logger.error("Error getting market snapshot: %s", str(e))
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/market/technical/<symbol>', methods=['GET'])
 @login_required
 def get_technical_data(symbol):
+    """Handle get technical data request"""
     try:
         days = int(request.args.get('days', '5'))
         indicators = market_data.get_technical_indicators(symbol, days)
         return jsonify(indicators)
     except Exception as e:
-        logging.error(f"Error getting technical indicators: {str(e)}")
+        logger.error("Error getting technical indicators: %s", str(e))
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/market/breadth', methods=['GET'])
 @login_required
 def get_market_breadth():
+    """Handle get market breadth request"""
     try:
         breadth = market_data.get_market_breadth()
         return jsonify(breadth)
     except Exception as e:
-        logging.error(f"Error getting market breadth: {str(e)}")
+        logger.error("Error getting market breadth: %s", str(e))
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/market/vwap/<symbol>', methods=['GET'])
 @login_required
 def get_vwap(symbol):
+    """Handle get VWAP request"""
     try:
         vwap = market_data.get_intraday_vwap(symbol)
         return jsonify({'vwap': vwap})
     except Exception as e:
-        logging.error(f"Error getting VWAP: {str(e)}")
+        logger.error("Error getting VWAP: %s", str(e))
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/market/status', methods=['GET'])
 @login_required
 def get_market_status():
+    """Handle get market status request"""
     try:
         is_open = market_data.is_market_open()
         return jsonify({'is_open': is_open})
     except Exception as e:
-        logging.error(f"Error getting market status: {str(e)}")
+        logger.error("Error getting market status: %s", str(e))
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/portfolio/summary')
+@login_required
+def get_portfolio_summary():
+    """Handle get portfolio summary request"""
+    try:
+        logger.info("Fetching portfolio summary...")
+        analysis = alpaca.get_portfolio_analysis()
+        if not analysis:
+            logger.error("Portfolio analysis returned None")
+            return jsonify({'error': 'Failed to get portfolio analysis'}), 500
+        logger.info("Portfolio summary: %s", analysis)
+        return jsonify(analysis)
+    except Exception as e:
+        logger.error("Error fetching portfolio summary: %s", str(e))
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/portfolio/positions')
+@login_required
+def get_positions():
+    """Handle get positions request"""
+    try:
+        positions = alpaca.get_positions()
+        return jsonify(positions)
+    except Exception as e:
+        logger.error("Error fetching positions: %s", str(e))
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/portfolio/charts')
+@login_required
+def get_portfolio_charts():
+    """Handle get portfolio charts request"""
+    try:
+        logger.info("Generating portfolio charts...")
+        charts = alpaca.create_portfolio_visualizations()
+        if not charts:
+            logger.error("Portfolio charts returned None")
+            return jsonify({'error': 'Could not generate charts'}), 500
+        logger.info("Successfully generated portfolio charts")
+        
+        # Convert Plotly figures to JSON
+        chart_data = {
+            'treemap': charts['treemap'].to_json(),
+            'distribution': charts['distribution'].to_json(),
+            'winners_losers': charts['winners_losers'].to_json(),
+            'allocation': charts['allocation'].to_json()
+        }
+        return jsonify(chart_data)
+    except Exception as e:
+        logger.error("Error generating charts: %s", str(e))
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/trades/recent')
+@login_required
+def get_recent_trades():
+    """Handle get recent trades request"""
+    try:
+        trades = alpaca.get_recent_trades()
+        return jsonify(trades)
+    except Exception as e:
+        logger.error("Error fetching recent trades: %s", str(e))
         return jsonify({'error': str(e)}), 500
 
 @socketio.on('connect')
 def handle_connect():
+    """Handle client connection"""
+    logger.info("Client connected: %s", request.sid)
     global bot_thread
     if bot_thread is None:
         bot_thread = socketio.start_background_task(background_thread)
+    emit('connection_response', {'status': 'connected'})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle client disconnection"""
+    logger.info("Client disconnected: %s", request.sid)
 
 @socketio.on('start_bot')
 def handle_start_bot():
+    """Handle start bot request"""
     global bot, is_bot_running
     if not is_bot_running:
         config = TradingConfig()
@@ -352,6 +503,7 @@ def handle_start_bot():
 
 @socketio.on('stop_bot')
 def handle_stop_bot():
+    """Handle stop bot request"""
     global bot, is_bot_running
     if is_bot_running and bot:
         bot.stop()
@@ -372,30 +524,15 @@ if __name__ == '__main__':
     # Initialize admin account if it doesn't exist
     init_admin_account()
     
-    # Get port from environment variable or use default
-    port = int(os.getenv('PORT', 5000))
+    # Start background thread
+    thread = threading.Thread(target=background_thread)
+    thread.daemon = True
+    thread.start()
     
-    # Get host from environment variable or use default
-    host = os.getenv('HOST', '0.0.0.0')
-    
-    # SSL context for HTTPS (optional but recommended for production)
-    ssl_context = None
-    cert_path = os.getenv('SSL_CERT_PATH')
-    key_path = os.getenv('SSL_KEY_PATH')
-    
-    if cert_path and key_path:
-        ssl_context = (cert_path, key_path)
-    
-    print(f"Starting server on {host}:{port}")
-    print("Access the application at:")
-    print(f"Local: http://localhost:{port}")
-    print(f"Network: http://<your-ip-address>:{port}")
-    
-    logging.basicConfig(level=logging.INFO)
-    
+    # Start the Flask-SocketIO server
     socketio.run(app, 
-                 host=host, 
-                 port=port, 
-                 debug=False,  # Set to False for production
-                 ssl_context=ssl_context,
-                 allow_unsafe_werkzeug=True)  # Only for development
+                host='127.0.0.1',  # Only allow local connections
+                port=5002,  # Use a different port
+                debug=True,
+                use_reloader=False,  # Disable reloader in debug mode
+                allow_unsafe_werkzeug=True)

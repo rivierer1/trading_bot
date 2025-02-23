@@ -29,11 +29,10 @@ class TwitterClient:
                 
             return tweepy.Client(
                 bearer_token=bearer_token,
-                wait_on_rate_limit=True,
-                return_type=dict
+                wait_on_rate_limit=True
             )
         except Exception as e:
-            logger.error(f"Failed to create Twitter client: {e}")
+            logger.error(f"Error creating Twitter client: {e}")
             return None
 
     def _wait_for_rate_limit(self):
@@ -61,6 +60,33 @@ class TwitterClient:
                 if wait_time > 0:
                     logger.warning(f"Rate limit reached. Reset in {wait_time:.0f} seconds")
                     raise Exception(f"Rate limit exceeded. Please wait {wait_time:.0f} seconds.")
+
+    def test_connection(self):
+        """Test Twitter API connection and permissions"""
+        try:
+            if not self.client:
+                logger.error("No Twitter client available - check your bearer token")
+                return False
+            
+            # Try to get user info (requires user.read scope)
+            me = self.client.get_me()
+            logger.info("Twitter API connection successful")
+            
+            # Check rate limits
+            self._update_rate_limits()
+            logger.info(f"Remaining requests: {self.remaining_requests}")
+            logger.info(f"Rate limit reset time: {datetime.fromtimestamp(self.rate_limit_reset)}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Twitter API connection failed: {e}")
+            if "401" in str(e):
+                logger.error("Authentication failed - check your bearer token")
+            elif "403" in str(e):
+                logger.error("Permission denied - check your API access level and permissions")
+            elif "429" in str(e):
+                logger.error("Rate limit exceeded - wait before trying again")
+            return False
 
     def get_tweets(self, keywords, hours_lookback=1, max_tweets=100):
         """Get recent tweets for given keywords"""

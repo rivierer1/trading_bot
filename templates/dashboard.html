@@ -2,8 +2,71 @@
 
 {% block content %}
 <div class="container-fluid mt-4">
+    <!-- Portfolio Summary -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Portfolio Summary</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row" id="portfolio-summary">
+                        <!-- Portfolio summary metrics will be inserted here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Portfolio Charts -->
     <div class="row">
-        <!-- Market Status -->
+        <div class="col-md-6 mb-4">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Portfolio Composition</h5>
+                </div>
+                <div class="card-body">
+                    <div id="treemap-chart"></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6 mb-4">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Portfolio Allocation</h5>
+                </div>
+                <div class="card-body">
+                    <div id="allocation-chart"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-6 mb-4">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Winners & Losers</h5>
+                </div>
+                <div class="card-body">
+                    <div id="winners-losers-chart"></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6 mb-4">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Return Distribution</h5>
+                </div>
+                <div class="card-body">
+                    <div id="distribution-chart"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Market Status -->
+    <div class="row">
         <div class="col-12 mb-4">
             <div id="market-status" class="text-end"></div>
         </div>
@@ -53,20 +116,11 @@
                 </div>
             </div>
         </div>
-        
-        <!-- Price Chart -->
-        <div class="col-12 mt-4">
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">Price Chart</h5>
-                    <canvas id="priceChart"></canvas>
-                </div>
-            </div>
-        </div>
     </div>
 </div>
 {% endblock %}
 
-{% block extra_js %}
+{% block scripts %}
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 {% endblock %}

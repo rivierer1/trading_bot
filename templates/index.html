@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Trading Bot Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+</head>
+<body>
+    <div class="dashboard-container">
+        <div class="header">
+            <h1>Portfolio Dashboard</h1>
+            <div class="summary" id="portfolio-summary">
+                <!-- Summary metrics will be inserted here -->
+            </div>
+        </div>
+        
+        <div class="grid-container">
+            <div class="chart-container">
+                <div id="treemap-chart"></div>
+            </div>
+            <div class="chart-container">
+                <div id="allocation-chart"></div>
+            </div>
+        </div>
+        
+        <div class="grid-container">
+            <div class="chart-container">
+                <div id="winners-losers-chart"></div>
+            </div>
+            <div class="chart-container">
+                <div id="distribution-chart"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>

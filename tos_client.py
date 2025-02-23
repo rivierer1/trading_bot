@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 import pandas as pd
 from tda import auth, client
 from selenium import webdriver
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
 from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.INFO)
@@ -16,72 +18,101 @@ class ThinkOrSwimClient:
         if not self.api_key:
             logger.error("TOS_API_KEY not found in environment variables")
         else:
-            logger.info(f"Loaded API key: {self.api_key[:5]}...")  # Only log first 5 chars for security
+            # Ensure API key has the correct suffix
+            if not self.api_key.endswith('@AMER.OAUTHAP'):
+                self.api_key = f"{self.api_key}@AMER.OAUTHAP"
+            logger.info(f"Using API key: {self.api_key[:5]}...@AMER.OAUTHAP")
             
-        self.api_secret = os.getenv('TOS_API_SECRET')
-        self.redirect_uri = os.getenv('TOS_REDIRECT_URI', 'http://localhost:8080')
+        self.redirect_uri = 'http://localhost:8080'
         self.token_path = 'token.json'
         self.account_id = int(os.getenv('TOS_ACCOUNT_ID')) if os.getenv('TOS_ACCOUNT_ID') else None
         self.client = None
         self._authenticate()
 
     def _authenticate(self):
-        """Authenticate with TD Ameritrade API"""
+        """Authenticate with TD Ameritrade API (now through Schwab)"""
         try:
             if not self.api_key:
-                logger.error("TOS_API_KEY not found in environment variables")
-                return
+                raise ValueError("API key not found")
 
-            if os.path.exists(self.token_path):
-                logger.info("Found existing token file, attempting to use it...")
-                try:
-                    self.client = auth.client_from_token_file(
-                        self.token_path,
-                        self.api_key
-                    )
-                    logger.info("Successfully authenticated with token file")
-                    return
-                except Exception as e:
-                    logger.warning(f"Failed to authenticate with token file: {e}")
-                    # Token might be expired, try webdriver auth
+            logger.info("Starting TD Ameritrade authentication process...")
+            logger.info(f"Using redirect URI: {self.redirect_uri}")
             
-            logger.info("Starting webdriver authentication...")
+            # Try to authenticate using existing token
             try:
-                # For Chrome
-                from selenium.webdriver.chrome.service import Service
-                from webdriver_manager.chrome import ChromeDriverManager
-                from selenium.webdriver.chrome.options import Options
-
-                chrome_options = Options()
-                # chrome_options.add_argument("--headless")  # Run in headless mode
-                chrome_options.add_argument("--ignore-certificate-errors")  # Accept self-signed certificates
-                chrome_options.add_argument("--ignore-ssl-errors")
-                chrome_options.add_argument("--allow-insecure-localhost")
+                logger.info("Attempting to use existing token...")
+                self.client = auth.client_from_token_file(
+                    self.token_path,
+                    self.api_key
+                )
+                logger.info("Successfully authenticated using existing token")
+                return
+            except FileNotFoundError:
+                logger.info("No token file found, starting new authentication flow")
+            except Exception as e:
+                logger.warning(f"Error using existing token: {e}")
+                logger.info("Starting fresh authentication flow")
                 
-                service = Service(ChromeDriverManager().install())
-                driver = webdriver.Chrome(service=service, options=chrome_options)
-                
+            # Configure Chrome options for Schwab login page
+            from selenium.webdriver.chrome.service import Service
+            from selenium.webdriver.chrome.options import Options
+            from webdriver_manager.chrome import ChromeDriverManager
+            
+            chrome_options = Options()
+            chrome_options.add_argument('--start-maximized')  # Make window visible
+            chrome_options.add_argument('--disable-gpu')
+            chrome_options.add_argument('--no-sandbox')
+            chrome_options.add_argument('--disable-dev-shm-usage')
+            
+            # These options help keep the browser open
+            chrome_options.add_experimental_option("detach", True)
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
+            
+            # Create service with latest chromedriver
+            service = Service(ChromeDriverManager().install())
+            
+            logger.info("Launching Chrome for authentication...")
+            logger.info("Please complete the login process in the browser window")
+            logger.info("Note: You may be redirected to Schwab's login page - this is expected")
+            logger.info("DO NOT CLOSE THE BROWSER until authentication is complete")
+            
+            # Start new authentication flow with longer timeout
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            try:
                 self.client = auth.client_from_login_flow(
                     driver,
                     self.api_key,
                     self.redirect_uri,
-                    self.token_path
+                    self.token_path,
+                    redirect_wait_time_seconds=180  # Even longer timeout
                 )
-                logger.info("Successfully authenticated with webdriver")
-                driver.quit()
+                logger.info("Authentication successful!")
+                logger.info(f"Token saved to: {self.token_path}")
             except Exception as e:
-                logger.error(f"Webdriver authentication failed: {e}")
-                if 'driver' in locals():
+                logger.error(f"Authentication failed: {e}")
+                logger.error("If you're seeing Schwab's login page, this is expected due to the TD Ameritrade acquisition")
+                logger.error("Please ensure you're using your TD Ameritrade credentials on the Schwab login page")
+                self.client = None
+            finally:
+                try:
                     driver.quit()
+                except:
+                    pass
+                
         except Exception as e:
-            logger.error(f"Authentication error: {str(e)}")
+            logger.error(f"Authentication failed: {e}")
+            logger.error("If you're seeing Schwab's login page, this is expected due to the TD Ameritrade acquisition")
+            logger.error("Please ensure you're using your TD Ameritrade credentials on the Schwab login page")
+            self.client = None
 
     def _ensure_authenticated(self):
         """Ensure we have an authenticated client"""
         if not self.client:
-            logger.warning("Client not authenticated, attempting to authenticate...")
-            self._authenticate()
-        return self.client is not None
+            logger.error("No authenticated client available")
+            raise Exception("Authentication required. Please run authentication process first.")
+            
+        # TODO: Add token refresh logic here if needed
 
     def get_quote(self, symbol):
         """Get real-time quote for a symbol"""
@@ -206,4 +237,77 @@ class ThinkOrSwimClient:
             return chain_data
         except Exception as e:
             logger.error(f"Error getting option chain for {symbol}: {str(e)}")
+            return None
+
+    def test_connection(self):
+        """Test TD Ameritrade API connection and permissions"""
+        try:
+            if not self.client:
+                logger.error("No TD Ameritrade client available - check authentication")
+                return False
+            
+            # Try to get all accounts first
+            logger.info("Attempting to retrieve account information...")
+            accounts = self.get_accounts()
+            if accounts:
+                logger.info(f"Successfully retrieved {len(accounts)} account(s)")
+                for acc in accounts:
+                    logger.info(f"Account found - ID: {acc['securitiesAccount']['accountId']}")
+                return True
+            else:
+                logger.error("Failed to retrieve account information")
+                return False
+                
+        except Exception as e:
+            logger.error(f"TD Ameritrade API connection failed: {e}")
+            if "401" in str(e):
+                logger.error("Authentication failed - token may have expired")
+            elif "403" in str(e):
+                logger.error("Permission denied - check account permissions")
+            elif "429" in str(e):
+                logger.error("Rate limit exceeded - wait before trying again")
+            return False
+
+    def get_accounts(self):
+        """Get all TD Ameritrade accounts associated with the authenticated user"""
+        try:
+            self._ensure_authenticated()
+            response = self.client.get_accounts()
+            
+            if response.status_code == 200:
+                accounts = response.json()
+                logger.info("Successfully retrieved account information")
+                return accounts
+            else:
+                logger.error(f"Failed to get accounts. Status code: {response.status_code}")
+                logger.error(f"Response: {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting accounts: {str(e)}")
+            return None
+
+    def get_account_details(self, account_id=None):
+        """Get detailed information for a specific account"""
+        try:
+            self._ensure_authenticated()
+            account_id = account_id or self.account_id
+            
+            if not account_id:
+                logger.error("No account ID provided")
+                return None
+                
+            response = self.client.get_account(account_id)
+            
+            if response.status_code == 200:
+                account = response.json()
+                logger.info(f"Successfully retrieved details for account {account_id}")
+                return account
+            else:
+                logger.error(f"Failed to get account details. Status code: {response.status_code}")
+                logger.error(f"Response: {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting account details: {str(e)}")
             return None

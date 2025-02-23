@@ -88,9 +88,66 @@ body {
     border-left: 3px solid #0d6efd;
 }
 
+/* Portfolio Dashboard */
+.card {
+    box-shadow: 0 0.15rem 1.75rem 0 rgba(58, 59, 69, 0.15);
+    border: none;
+    border-radius: 0.35rem;
+}
+
+.card-header {
+    background-color: #f8f9fc;
+    border-bottom: 1px solid #e3e6f0;
+}
+
+.metric {
+    text-align: center;
+    padding: 1rem;
+    background-color: #f8f9fc;
+    border-radius: 0.35rem;
+}
+
+.metric h6 {
+    margin-bottom: 0.5rem;
+    color: #4e73df;
+}
+
+.metric h4 {
+    margin-bottom: 0;
+    font-weight: 700;
+}
+
+.text-success {
+    color: #1cc88a !important;
+}
+
+.text-danger {
+    color: #e74a3b !important;
+}
+
+/* Chart containers */
+#treemap-chart,
+#allocation-chart,
+#winners-losers-chart,
+#distribution-chart {
+    width: 100%;
+    height: 400px;
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
     .card {
         margin-bottom: 1rem;
+    }
+    
+    .metric {
+        margin-bottom: 1rem;
+    }
+    
+    #treemap-chart,
+    #allocation-chart,
+    #winners-losers-chart,
+    #distribution-chart {
+        height: 300px;
     }
 }
